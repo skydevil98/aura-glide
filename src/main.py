@@ -7,10 +7,10 @@ import wave
 import struct
 import math
 import asyncio
-from settings import *
-from particles import ParticleSystem
-from entities import Player, Obstacle
-from ui import Button, TextRenderer, draw_panel
+from src.settings import *
+from src.particles import ParticleSystem
+from src.entities import Player, Obstacle
+from src.ui import Button, TextRenderer, draw_panel
 
 class Game:
     def __init__(self):
@@ -96,10 +96,10 @@ class Game:
     def setup_audio(self):
         os.makedirs('assets/sounds', exist_ok=True)
         sound_files = {
-            'flap': 'assets/sounds/flap.wav',
-            'score': 'assets/sounds/score.wav',
-            'crash': 'assets/sounds/crash.wav',
-            'bgm': 'assets/sounds/bgm.wav'
+            'flap': 'assets/sounds/flap.ogg',
+            'score': 'assets/sounds/score.ogg',
+            'crash': 'assets/sounds/crash.ogg',
+            'bgm': 'assets/sounds/bgm.ogg'
         }
         for name, path in sound_files.items():
             if not os.path.exists(path):
