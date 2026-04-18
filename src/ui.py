@@ -1,6 +1,6 @@
 # ui.py
 import pygame
-from settings import *
+from src.settings import *
 
 def draw_panel(surface, rect, radius, alpha=150):
     """Draws a glassmorphism style rounded panel."""

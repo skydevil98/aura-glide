@@ -1,7 +1,7 @@
 # particles.py
 import pygame
 import random
-from settings import *
+from src.settings import *
 
 class Particle:
     def __init__(self, x, y, color=PARTICLE_COLOR, speed_x=0, speed_y=0, shrink_rate=0.1, radius=4):

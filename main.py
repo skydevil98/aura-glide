@@ -1,19 +1,18 @@
 # main.py
 import pygame
-import sys
 import random
 import os
-import wave
-import struct
 import math
+import array
 import asyncio
 from src.settings import *
-from src.particles import ParticleSystem
+from src.particles import ParticleSystem, Particle
 from src.entities import Player, Obstacle
 from src.ui import Button, TextRenderer, draw_panel
 
 class Game:
     def __init__(self):
+        pygame.mixer.pre_init(22050, -16, 1, 512)
         pygame.init()
         pygame.mixer.init()
         self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -33,91 +32,85 @@ class Game:
         self.setup_audio()
         self.setup_ui()
 
-    def generate_sound(self, filename, sound_type):
-        sample_rate = 44100
-        if sound_type == "flap":
-            duration = 0.15
-            n_samples = int(sample_rate * duration)
-            with wave.open(filename, 'w') as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(sample_rate)
-                for i in range(n_samples):
-                    t = float(i) / sample_rate
-                    freq = 200 + (200 * (t / duration))
-                    val = int(32767.0 * 0.5 * math.sin(2.0 * math.pi * freq * t))
-                    envelope = 1.0 - (t / duration)
-                    wav_file.writeframesraw(struct.pack('<h', int(val * envelope)))
-        elif sound_type == "score":
-            duration = 0.4
-            n_samples = int(sample_rate * duration)
-            with wave.open(filename, 'w') as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(sample_rate)
-                for i in range(n_samples):
-                    t = float(i) / sample_rate
-                    freq = 880.0
-                    envelope = math.exp(-6.0 * t) # smooth fade out
-                    val = math.sin(2.0 * math.pi * freq * t)
-                    val += 0.3 * math.sin(2.0 * math.pi * (freq * 2) * t) # subtle harmonic
-                    val = int(32767.0 * 0.15 * val * envelope)
-                    wav_file.writeframesraw(struct.pack('<h', val))
-        elif sound_type == "crash":
-            duration = 0.5
-            n_samples = int(sample_rate * duration)
-            with wave.open(filename, 'w') as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(sample_rate)
-                for i in range(n_samples):
-                    t = float(i) / sample_rate
-                    envelope = max(0, 1.0 - (t / duration))
-                    val = int(32767.0 * 0.5 * random.uniform(-1, 1) * envelope)
-                    wav_file.writeframesraw(struct.pack('<h', val))
-        elif sound_type == "bgm":
-            duration = 4.0
-            n_samples = int(sample_rate * duration)
-            with wave.open(filename, 'w') as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(sample_rate)
-                for i in range(n_samples):
-                    t = float(i) / sample_rate
-                    f1, f2, f3 = 130.81, 164.81, 196.00
-                    lfo = 0.5 + 0.5 * math.sin(2.0 * math.pi * 0.5 * t)
-                    val1 = math.sin(2.0 * math.pi * f1 * t)
-                    val2 = math.sin(2.0 * math.pi * f2 * t)
-                    val3 = math.sin(2.0 * math.pi * f3 * t)
-                    mixed = (val1 + val2 + val3) / 3.0
-                    val = int(32767.0 * 0.15 * mixed * lfo)
-                    wav_file.writeframesraw(struct.pack('<h', val))
+    # ------------------------------------------------------------------
+    # In-memory PCM sound builders (no audio files — pygbag compatible)
+    # ------------------------------------------------------------------
+
+    _SR = 22050  # sample rate matching pre_init setting
+    _AMP = 32767
+
+    def _build_flap(self):
+        """Short rising sweep 200→400 Hz, 150 ms."""
+        n = int(self._SR * 0.15)
+        buf = array.array("h", [0] * n)
+        for i in range(n):
+            t = i / self._SR
+            freq = 200 + 200 * (i / n)
+            env = 1.0 - (i / n)
+            buf[i] = int(self._AMP * 0.5 * env * math.sin(2 * math.pi * freq * t))
+        return pygame.mixer.Sound(buffer=buf)
+
+    def _build_score(self):
+        """Two-note ascending ding 880 Hz → 1100 Hz."""
+        n_note = int(self._SR * 0.15)
+        buf = array.array("h", [0] * n_note * 2)
+        for idx, freq in enumerate((880, 1100)):
+            off = idx * n_note
+            for i in range(n_note):
+                t = i / self._SR
+                env = math.sin(math.pi * i / n_note) ** 0.5
+                buf[off + i] = int(self._AMP * 0.45 * env * math.sin(2 * math.pi * freq * t))
+        return pygame.mixer.Sound(buffer=buf)
+
+    def _build_crash(self):
+        """Descending buzzy hit 300→80 Hz, 300 ms."""
+        n = int(self._SR * 0.3)
+        buf = array.array("h", [0] * n)
+        for i in range(n):
+            t = i / self._SR
+            freq = 300 - 220 * (i / n)
+            env = math.exp(-t * 7)
+            raw = math.sin(2 * math.pi * freq * t)
+            clipped = max(-0.6, min(0.6, raw * 2.0)) / 0.6
+            buf[i] = int(self._AMP * 0.7 * env * clipped)
+        return pygame.mixer.Sound(buffer=buf)
+
+    def _build_bgm(self):
+        """4-second ambient chord loop (C3 chord), looped via dedicated channel."""
+        n = int(self._SR * 4.0)
+        buf = array.array("h", [0] * n)
+        for i in range(n):
+            t = i / self._SR
+            lfo = 0.5 + 0.5 * math.sin(2 * math.pi * 0.5 * t)
+            val = (math.sin(2 * math.pi * 130.81 * t)
+                 + math.sin(2 * math.pi * 164.81 * t)
+                 + math.sin(2 * math.pi * 196.00 * t)) / 3.0
+            buf[i] = int(self._AMP * 0.15 * val * lfo)
+        return pygame.mixer.Sound(buffer=buf)
 
     def setup_audio(self):
-        os.makedirs('assets/sounds', exist_ok=True)
-        sound_files = {
-            'flap': 'assets/sounds/flap.ogg',
-            'score': 'assets/sounds/score.ogg',
-            'crash': 'assets/sounds/crash.ogg',
-            'bgm': 'assets/sounds/bgm.ogg'
-        }
-        for name, path in sound_files.items():
-            if not os.path.exists(path):
-                self.generate_sound(path, name)
-                
+        self._audio_enabled = False
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(self._SR, -16, 1, 512)
+            self._audio_enabled = True
+        except pygame.error:
+            self.sounds = {}
+            return
+
         self.sounds = {
-            'flap': pygame.mixer.Sound(sound_files['flap']),
-            'score': pygame.mixer.Sound(sound_files['score']),
-            'crash': pygame.mixer.Sound(sound_files['crash'])
+            'flap':  self._build_flap(),
+            'score': self._build_score(),
+            'crash': self._build_crash(),
         }
-        
-        # Lower volume a bit for effects
         for s in self.sounds.values():
             s.set_volume(0.3)
-            
-        pygame.mixer.music.load(sound_files['bgm'])
-        pygame.mixer.music.set_volume(0.2)
-        pygame.mixer.music.play(-1)
+
+        # BGM: loop on a reserved channel instead of pygame.mixer.music
+        bgm = self._build_bgm()
+        bgm.set_volume(0.2)
+        self._bgm_channel = pygame.mixer.Channel(0)
+        self._bgm_channel.play(bgm, loops=-1)
 
     def play_sound(self, name):
         if name in self.sounds:
@@ -146,8 +139,8 @@ class Game:
         mouse_pos = pygame.mouse.get_pos()
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
+                self.running = False
+                return
             
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_SPACE:
@@ -169,8 +162,8 @@ class Game:
                     if self.play_btn.rect.collidepoint(mouse_pos):
                         self.reset_game()
                     if self.quit_btn.rect.collidepoint(mouse_pos):
-                        pygame.quit()
-                        sys.exit()
+                        self.running = False
+                        return
                 elif self.state == "PLAYING":
                     self.player.flap()
                     self.play_sound("flap")
@@ -207,7 +200,7 @@ class Game:
             # Subtle background ambient particles
             if random.random() < 0.1:
                 self.particles.particles.append(
-                    __import__("particles").Particle(random.randint(0, WIDTH), HEIGHT + 10, speed_y=random.uniform(-3, -1), color=(60, 70, 90), shrink_rate=0.015, radius=random.uniform(2,5))
+                    Particle(random.randint(0, WIDTH), HEIGHT + 10, speed_y=random.uniform(-3, -1), color=(60, 70, 90), shrink_rate=0.015, radius=random.uniform(2,5))
                 )
             self.particles.update()
 
@@ -307,7 +300,8 @@ class Game:
         pygame.display.flip()
 
     async def run(self):
-        while True:
+        self.running = True
+        while self.running:
             self.handle_events()
             self.update()
             self.draw()
@@ -320,5 +314,4 @@ async def main():
     except Exception as e:
         print(f"Error starting game: {e}")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())

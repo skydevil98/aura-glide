@@ -1,7 +1,7 @@
 # entities.py
 import pygame
 import random
-from settings import *
+from src.settings import *
 
 class Player:
     def __init__(self):
